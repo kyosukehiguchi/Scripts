@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""
+remove_irrelevant_rows.py
+Excelファイルの指定したカラムで、特定の定型文（正規表現）にマッチする行を削除するスクリプト。
+
+使い方:
+    # デフォルト値で実行
+    python remove_irrelevant_rows.py
+
+    # 任意のファイルやカラムを指定して実行
+    python remove_irrelevant_rows.py INPUT.xlsx OUTPUT.xlsx \
+        --sheet Sheet1 --column コメント
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+# ------------------------------------------------------------
+# デフォルト値（必要に応じて変更してください）
+# ------------------------------------------------------------
+DEFAULT_INPUT = r"（インプットファイル名）"
+DEFAULT_OUTPUT = r"（アウトプットファイル名）"
+DEFAULT_SHEET = "（シート名）"
+DEFAULT_COLUMN = "（カラム名）"
+
+# ------------------------------------------------------------
+# 正規表現パターン（指定通り）
+# ------------------------------------------------------------
+IGNORE_PATTERN = re.compile(
+    r"^(現状|今|いま|現時点)?(のところ|は|では|で)?(特段|特に|とくに)?(は)?(わかりません|分かりません|ありません|有りません|ない|無い|無し|なし|ない|ございません)?(です)?[。、！!\?？]?$"
+)
+
+def is_relevant(text: str) -> bool:
+    """特定の定型文にマッチしない（＝有益な記述である）かを判定。"""
+    if pd.isna(text) or not isinstance(text, str):
+        return True  # 欠損値や文字列以外は残す（必要に応じて False に変更）
+
+    s = text.strip()
+    return not IGNORE_PATTERN.fullmatch(s)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="指定カラムが定型文にマッチする行を削除して別ファイルに保存するスクリプト"
+    )
+    parser.add_argument(
+        "input",
+        nargs="?",
+        default=DEFAULT_INPUT,
+        help=f"入力 Excel ファイルパス (デフォルト: {DEFAULT_INPUT})",
+    )
+    parser.add_argument(
+        "output",
+        nargs="?",
+        default=DEFAULT_OUTPUT,
+        help=f"出力 Excel ファイルパス (デフォルト: {DEFAULT_OUTPUT})",
+    )
+    parser.add_argument(
+        "--sheet",
+        default=DEFAULT_SHEET,
+        help=f"対象シート名 (デフォルト: {DEFAULT_SHEET})",
+    )
+    parser.add_argument(
+        "--column",
+        default=DEFAULT_COLUMN,
+        help=f"対象カラム名 (デフォルト: {DEFAULT_COLUMN})",
+    )
+    args = parser.parse_args()
+
+    in_path = Path(args.input)
+    out_path = Path(args.output)
+
+    if not in_path.exists():
+        sys.exit(f"入力ファイルが見つかりません: {in_path}")
+
+    try:
+        df = pd.read_excel(in_path, sheet_name=args.sheet)
+    except ValueError as e:
+        sys.exit(f"シート '{args.sheet}' が見つかりません\n{e}")
+
+    if args.column not in df.columns:
+        sys.exit(f"カラム '{args.column}' が見つかりません。列名を確認してください。")
+
+    # フィルタ処理
+    mask_relevant = df[args.column].apply(is_relevant)
+    removed_count = (~mask_relevant).sum()
+    df_clean = df[mask_relevant].copy()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df_clean.to_excel(out_path, index=False)
+
+    print(f"完了: {removed_count} 行を削除しました。保存先: {out_path.resolve()}")
+
+
+if __name__ == "__main__":
+    main()
