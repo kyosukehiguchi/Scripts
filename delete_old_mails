@@ -1,0 +1,114 @@
+# -*- coding: utf-8 -*-
+"""
+既定の受信トレイ配下で「受信日時が 2 年以上前」のアイテムを削除
+-----------------------------------------------------------
+■ 必要モジュール
+    pip install pywin32 python-dateutil
+■ 設定欄
+    SUBFOLDER_PATH … 受信トレイからの相対パス ('' ならトレイ直下)
+    HARD_DELETE    … True で完全削除、False で削除済みアイテムへ移動
+-----------------------------------------------------------
+"""
+
+import sys
+from datetime import datetime, timezone
+from dateutil.relativedelta import relativedelta
+import pythoncom
+import win32com.client
+
+# ------------------ 設定ここから ------------------ #
+SUBFOLDER_PATH = r""        # 例: r"月次レポート\\2021"
+HARD_DELETE     = False     # True で完全削除
+VERBOSE         = True      # 進捗メッセージを表示
+# ------------------ 設定ここまで ------------------ #
+
+# 既定フォルダ定数
+olFolderInbox        = 6
+olFolderDeletedItems = 3
+
+def resolve_subfolder(base_folder, rel_path):
+    """既定 Inbox から相対パスでサブフォルダを取得"""
+    if not rel_path:
+        return base_folder
+    current = base_folder
+    for part in rel_path.split("\\"):
+        matches = [f for f in current.Folders if f.Name.lower() == part.lower()]
+        if not matches:
+            raise ValueError(f"サブフォルダ '{part}' が見つかりません")
+        current = matches[0]
+    return current
+
+def to_utc(dt_obj):
+    """aware/naive を問わず datetime を UTC aware に変換"""
+    if dt_obj.tzinfo is None:
+        # ローカル→aware→UTC
+        dt_obj = dt_obj.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return dt_obj.astimezone(timezone.utc)
+
+def delete_old_items(folder, cutoff_utc, hard_delete=False):
+    """2年以上前アイテムを削除／移動（タイムゾーン安全）"""
+    session = folder.Application.Session
+
+    # ---------- ① 古いアイテムの EntryID を収集 ----------
+    items = folder.Items
+    items.Sort("[ReceivedTime]", True)   # 降順で高速化
+
+    entry_ids = []
+    for itm in items:
+        if not hasattr(itm, "ReceivedTime"):
+            continue
+        if to_utc(itm.ReceivedTime) < cutoff_utc:
+            entry_ids.append(itm.EntryID)
+
+    total   = len(entry_ids)
+    removed = 0
+
+    # ---------- ② 削除 / 削除済みアイテムへ移動 ----------
+    if not hard_delete:
+        try:
+            del_folder = folder.Store.GetDefaultFolder(olFolderDeletedItems)
+        except AttributeError:
+            del_folder = session.GetDefaultFolder(olFolderDeletedItems)
+
+    for eid in entry_ids:
+        try:
+            itm = session.GetItemFromID(eid)
+            if hard_delete:
+                itm.Delete()
+            else:
+                itm.Move(del_folder)
+            removed += 1
+            if VERBOSE and removed % 100 == 0:
+                print(f"{removed}/{total} 件削除…")
+        except pythoncom.com_error:
+            continue    # 競合などは無視
+
+    return removed
+
+def main():
+    pythoncom.CoInitialize()
+    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+    inbox   = outlook.GetDefaultFolder(olFolderInbox)
+
+    try:
+        target_folder = resolve_subfolder(inbox, SUBFOLDER_PATH)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
+
+    # 現在時刻を UTC aware に→2年差分
+    cutoff_utc = datetime.now(timezone.utc) - relativedelta(years=2)
+
+    if VERBOSE:
+        print(f"基準日 (UTC): {cutoff_utc:%Y-%m-%d %H:%M}")
+        print(f"対象フォルダ: {target_folder.FolderPath}")
+        print("削除方式    :", "完全削除" if HARD_DELETE else "削除済みアイテムへ移動")
+        print("-" * 40)
+
+    removed = delete_old_items(target_folder, cutoff_utc, HARD_DELETE)
+
+    print(f"完了: {removed} 件を処理しました。")
+    pythoncom.CoUninitialize()
+
+if __name__ == "__main__":
+    main()
