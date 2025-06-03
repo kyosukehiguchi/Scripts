@@ -1,0 +1,37 @@
+from docx import Document
+import re
+
+def process_paragraph_text(text):
+    # 各段落を行ごとに分けて処理
+    lines = text.split('\n')
+    processed_lines = []
+
+    for line in lines:
+        # 文頭の全角スペース・半角スペースを削除
+        line = re.sub(r'^[\u3000\s]+', '', line)
+
+        # 文頭が「「」で始まる → 半角スペース
+        if line.startswith('「'):
+            line = ' ' + line
+        # それ以外 → 全角スペース
+        else:
+            line = '　' + line
+
+        processed_lines.append(line)
+
+    return '\n'.join(processed_lines)
+
+def process_docx(file_path, output_path):
+    doc = Document(file_path)
+
+    for para in doc.paragraphs:
+        original_text = para.text
+        new_text = process_paragraph_text(original_text)
+        para.text = new_text
+
+    doc.save(output_path)
+
+# 使用例
+input_path = r'（インプットファイルパス.docxを入力する）'
+output_path = r'（アウトプットファイルパス.docxを入力する）'
+process_docx(input_path, output_path)
